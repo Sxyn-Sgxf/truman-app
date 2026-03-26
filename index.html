@@ -25,7 +25,6 @@
             color: #fff; 
             font-family: 'Fira Code', monospace;
             overflow: hidden;
-            /* 防止 iOS 橡皮鞭效应 */
             position: fixed;
             width: 100%;
             height: 100%;
@@ -34,7 +33,6 @@
 
         .mv-font { font-family: 'Noto Serif SC', serif; }
 
-        /* 极速切镜动画 */
         .mv-cut {
             animation: mv-entry 0.4s cubic-bezier(0.2, 0, 0.2, 1) forwards;
         }
@@ -43,28 +41,18 @@
             100% { transform: scale(1.1) rotate(0deg); filter: brightness(1) blur(0px); opacity: 1; }
         }
 
-        /* 屏幕剧烈震动 */
-        .heavy-shake {
-            animation: shake-impact 0.1s infinite;
-        }
+        .heavy-shake { animation: shake-impact 0.1s infinite; }
         @keyframes shake-impact {
             0% { transform: translate(2px, 2px); }
-            25% { transform: translate(-2px, -2px); }
-            50% { transform: translate(-3px, 1px); }
-            75% { transform: translate(3px, -1px); }
             100% { transform: translate(0, 0); }
         }
 
-        /* 红色脉冲 */
-        .red-flash {
-            animation: flash-red 0.5s ease-out;
-        }
+        .red-flash { animation: flash-red 0.5s ease-out; }
         @keyframes flash-red {
             0% { background-color: rgba(255, 0, 0, 0.4); }
             100% { background-color: transparent; }
         }
 
-        /* 粒子画布 */
         #particle-canvas {
             position: absolute;
             top: 0; left: 0; width: 100%; height: 100%;
@@ -87,10 +75,8 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
-        // 这里的 apiKey 会在运行环境中自动注入
         const apiKey = ""; 
 
-        // --- PCM 转 WAV 助手函数 ---
         function pcmToWav(pcmData, sampleRate = 24000) {
             const buffer = new ArrayBuffer(44 + pcmData.length * 2);
             const view = new DataView(buffer);
@@ -114,10 +100,15 @@
             return new Blob([buffer], { type: 'audio/wav' });
         }
 
-        // --- API 助手函数 ---
         async function fetchMVConcept(query, retryCount = 0) {
             const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-            const prompt = `你要制作一段关于“${query}”的震撼视觉MV。要求极速切镜，充满大片感。`;
+            const prompt = `你是一个创意电影导演。现在需要为一个虚构的、艺术性质的视觉短片创作剧本。
+            主题是：“${query}”。
+            请注意：这是一个纯粹的艺术创作，不涉及现实政治煽动。
+            输出JSON：
+            1. mv_title: 标题。
+            2. mission_result: 虚构剧情的结果总结。
+            3. scenes: 8个极短场景（每个场景包含 prompt 绘图指令, lyric 台词, fx 震动等级）。`;
 
             try {
                 const response = await fetch(endpoint, {
@@ -144,44 +135,51 @@
                                             required: ["prompt", "lyric", "fx"]
                                         }
                                     }
-                                },
-                                required: ["mv_title", "mission_result", "scenes"]
+                                }
                             }
                         }
                     })
                 });
                 
-                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                if (!response.ok) {
+                    const errorJson = await response.json();
+                    if (errorJson.error?.message?.includes('safety')) {
+                        throw new Error("AI 安全过滤器拦截了此话题。请尝试更具艺术性或虚构性的描述。");
+                    }
+                    throw new Error("模型响应异常，请稍后再试。");
+                }
                 const data = await response.json();
                 const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (!text) throw new Error("API returned no text");
+                if (!text) throw new Error("AI 拒绝生成此类敏感内容。");
                 return JSON.parse(text);
             } catch (e) {
-                if (retryCount < 4) {
-                    const delay = Math.pow(2, retryCount) * 1000;
-                    await new Promise(res => setTimeout(res, delay));
+                if (e.message.includes("安全") || e.message.includes("敏感")) throw e;
+                if (retryCount < 3) {
+                    await new Promise(res => setTimeout(res, 2000));
                     return fetchMVConcept(query, retryCount + 1);
                 }
-                return null;
+                throw e;
             }
         }
 
         async function fetchTTS(text) {
             const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
-            const payload = {
-                contents: [{ parts: [{ text: `以震撼且充满张力的语气读：${text}！` }] }],
-                generationConfig: {
-                    responseModalities: ["AUDIO"],
-                    speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Charon" } } }
-                }
-            };
             try {
-                const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: `以震撼、宏大且充满磁性的电影旁白读：${text}！` }] }],
+                        generationConfig: {
+                            responseModalities: ["AUDIO"],
+                            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Charon" } } }
+                        }
+                    })
+                });
                 const result = await response.json();
                 const pcmBase64 = result.candidates[0].content.parts[0].inlineData.data;
                 const pcmData = new Int16Array(Uint8Array.from(atob(pcmBase64), c => c.charCodeAt(0)).buffer);
-                const wavBlob = pcmToWav(pcmData, 24000);
-                return URL.createObjectURL(wavBlob);
+                return URL.createObjectURL(pcmToWav(pcmData, 24000));
             } catch (e) { return null; }
         }
 
@@ -191,14 +189,12 @@
                 const response = await fetch(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ instances: { prompt: `${prompt}, cinematic masterpiece style, ultra-high resolution, dramatic composition, 8k` }, parameters: { sampleCount: 1 } })
+                    body: JSON.stringify({ instances: { prompt: `${prompt}, epic cinematic photography, dramatic lighting, highly detailed, 8k` }, parameters: { sampleCount: 1 } })
                 });
                 const result = await response.json();
                 return `data:image/png;base64,${result.predictions[0].bytesBase64Encoded}`;
             } catch (e) { return "https://images.unsplash.com/photo-1511447333015-45b65e60f6d5?q=80&w=1000"; }
         }
-
-        // --- 主程序 ---
 
         const App = () => {
             const [view, setView] = useState('landing'); 
@@ -216,14 +212,15 @@
                     setProgress(5);
 
                     const concept = await fetchMVConcept(q);
-                    if (!concept || !concept.scenes) throw new Error("AI 无法构思该剧本，请尝试不同的描述。");
-                    
                     setMvData(concept);
-                    setProgress(20);
+                    setProgress(25);
 
-                    const frames = await Promise.all(concept.scenes.map(s => generateFrame(s.prompt)));
-                    setProgress(60);
-                    const audios = await Promise.all(concept.scenes.map(s => fetchTTS(s.lyric)));
+                    const framePromises = concept.scenes.map(s => generateFrame(s.prompt));
+                    const frames = await Promise.all(framePromises);
+                    setProgress(65);
+
+                    const audioPromises = concept.scenes.map(s => fetchTTS(s.lyric));
+                    const audios = await Promise.all(audioPromises);
                     
                     setAssets(concept.scenes.map((s, i) => ({
                         image: frames[i],
@@ -234,18 +231,15 @@
                     setProgress(100);
                     setTimeout(() => setView('mv'), 500);
                 } catch (err) {
-                    setErrorMsg(err.message || "生成失败，请稍后重试。");
+                    setErrorMsg(err.message || "生成失败。");
                     setView('landing');
                 }
             };
 
-            const replayMV = () => setView('mv');
-            const continueScripting = () => setView('landing');
-
             if (view === 'landing') return <Landing onStart={startMV} error={errorMsg} initialVal={query} />;
             if (view === 'loading') return <Loading progress={progress} />;
             if (view === 'mv') return <MVPlayer assets={assets} onFinish={() => setView('result')} />;
-            if (view === 'result') return <ResultPanel mvData={mvData} onReplay={replayMV} onContinue={continueScripting} />;
+            if (view === 'result') return <ResultPanel mvData={mvData} onReplay={() => setView('mv')} onContinue={() => setView('landing')} />;
         };
 
         const Landing = ({ onStart, error, initialVal }) => {
@@ -257,8 +251,8 @@
                         <p className="tracking-[0.6em] text-zinc-600 text-[10px] font-bold uppercase">AI 视觉剧本引擎</p>
                         
                         {error && (
-                            <div className="bg-red-900/30 border border-red-600 text-red-500 p-3 rounded-lg text-sm font-mono">
-                                {error}
+                            <div className="bg-red-900/30 border border-red-600 text-red-500 p-4 rounded-xl text-sm font-bold animate-pulse">
+                                ⚠️ {error}
                             </div>
                         )}
 
@@ -267,7 +261,7 @@
                                 type="text" 
                                 value={val}
                                 onChange={e => setVal(e.target.value)}
-                                placeholder="输入剧本构想..."
+                                placeholder="输入构想（如：赛博朋克大决战）..."
                                 className="w-full bg-transparent border-b border-zinc-800 text-center text-xl md:text-4xl py-4 text-white focus:outline-none focus:border-red-600 transition-all font-bold italic"
                             />
                             <button className="mt-12 bg-red-600 text-white px-10 py-4 font-black uppercase tracking-widest hover:scale-105 active:scale-95 transition-all shadow-[0_0_20px_rgba(220,38,38,0.5)]">
@@ -281,7 +275,7 @@
 
         const Loading = ({ progress }) => (
             <div className="h-screen flex flex-col items-center justify-center bg-black gap-6">
-                <div className="w-64 h-[1px] bg-zinc-900 relative">
+                <div className="w-64 h-[2px] bg-zinc-900 relative">
                     <div className="h-full bg-red-600 transition-all duration-500 shadow-[0_0_10px_rgba(220,38,38,1)]" style={{ width: `${progress}%` }}></div>
                 </div>
                 <div className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest animate-pulse">正在重组现实维度... {progress}%</div>
@@ -300,7 +294,7 @@
                 canvas.height = window.innerHeight;
                 let particles = [];
                 for(let i=0; i<100; i++) particles.push({ x: Math.random()*canvas.width, y: Math.random()*canvas.height, vx: Math.random()*2-1, vy: Math.random()*5+2, size: Math.random()*3 });
-                let animationFrame;
+                let frame;
                 function animate() {
                     ctx.clearRect(0,0,canvas.width, canvas.height);
                     ctx.fillStyle = "rgba(255, 100, 0, 0.4)";
@@ -309,10 +303,10 @@
                         if(p.y < 0) p.y = canvas.height;
                         ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); ctx.fill();
                     });
-                    animationFrame = requestAnimationFrame(animate);
+                    frame = requestAnimationFrame(animate);
                 }
                 animate();
-                return () => cancelAnimationFrame(animationFrame);
+                return () => cancelAnimationFrame(frame);
             }, []);
 
             useEffect(() => {
@@ -357,10 +351,7 @@
                 <div className="h-screen bg-black flex items-center justify-center p-4 md:p-8 animate-[fadeIn_1.5s] overflow-y-auto">
                     <div className="max-w-4xl w-full border border-zinc-800 bg-zinc-950/50 p-6 md:p-12 relative overflow-hidden">
                         <div className="absolute top-0 left-0 w-full h-1 bg-red-600"></div>
-                        <header className="mb-8 md:mb-12">
-                            <h2 className="mv-font text-3xl md:text-6xl text-white mb-2 italic uppercase">{mvData.mv_title || "剧本已完成"}</h2>
-                            <p className="text-zinc-500 font-mono tracking-widest text-[10px]">作品分析报告 // ID: {Math.random().toString(36).substr(2, 6).toUpperCase()}</p>
-                        </header>
+                        <h2 className="mv-font text-3xl md:text-6xl text-white mb-2 italic uppercase">{mvData.mv_title}</h2>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10">
                             <div className="space-y-4">
                                 <h3 className="text-red-600 text-[10px] font-black tracking-widest uppercase">核心剧情概览</h3>
@@ -369,18 +360,14 @@
                             <div className="space-y-4">
                                 <h3 className="text-zinc-600 text-[10px] font-black tracking-widest uppercase">艺术影响力评估</h3>
                                 <div className="space-y-2">
-                                    <div className="flex justify-between text-[10px] py-1 border-b border-zinc-900"><span className="text-zinc-500">视觉冲击力</span><span className="text-red-500 font-bold">MAX</span></div>
-                                    <div className="flex justify-between text-[10px] py-1 border-b border-zinc-900"><span className="text-zinc-500">认知重构率</span><span className="text-white font-bold">100%</span></div>
+                                    <div className="flex justify-between text-[10px] py-1 border-b border-zinc-900"><span className="text-zinc-500 uppercase">视觉冲击力</span><span className="text-red-500 font-bold">MAX</span></div>
+                                    <div className="flex justify-between text-[10px] py-1 border-b border-zinc-900"><span className="text-zinc-500 uppercase">认知重构率</span><span className="text-white font-bold">100%</span></div>
                                 </div>
                             </div>
                         </div>
                         <div className="grid grid-cols-2 gap-4">
-                            <button onClick={onReplay} className="py-4 bg-zinc-900 text-white hover:bg-zinc-800 transition-all uppercase font-black tracking-widest text-[10px] border border-zinc-700 flex items-center justify-center gap-2">
-                                重播 MV
-                            </button>
-                            <button onClick={onContinue} className="py-4 bg-red-600 text-white hover:bg-red-500 transition-all uppercase font-black tracking-widest text-[10px] flex items-center justify-center gap-2">
-                                继续撰写
-                            </button>
+                            <button onClick={onReplay} className="py-4 bg-zinc-900 text-white hover:bg-zinc-800 transition-all uppercase font-black tracking-widest text-[10px] border border-zinc-700">重播 MV</button>
+                            <button onClick={onContinue} className="py-4 bg-red-600 text-white hover:bg-red-500 transition-all uppercase font-black tracking-widest text-[10px]">继续撰写</button>
                         </div>
                     </div>
                 </div>
